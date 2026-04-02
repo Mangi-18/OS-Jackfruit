@@ -48,7 +48,8 @@ It supports process isolation using Linux namespaces, chroot-based filesystem is
 ## Screenshots
 
 ### Screenshot 1: Basic Execution
-(image.png)
+### Screenshot 1: Basic Execution
+![Basic Execution](image.png)
 
 ### Screenshot 2: Fork + Exec
 ![alt text](image-1.png)
