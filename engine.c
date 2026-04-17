@@ -1,5 +1,3 @@
-// FULL WORKING ENGINE (SIMPLIFIED BUT COMPLETE)
-
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,6 +51,8 @@ int child_fn(void *arg)
 void register_monitor(int fd, char *id, pid_t pid,
                       unsigned long soft, unsigned long hard)
 {
+    if (fd < 0) return;
+
     struct monitor_request req;
     memset(&req, 0, sizeof(req));
 
@@ -66,6 +66,8 @@ void register_monitor(int fd, char *id, pid_t pid,
 
 void unregister_monitor(int fd, char *id, pid_t pid)
 {
+    if (fd < 0) return;
+
     struct monitor_request req;
     memset(&req, 0, sizeof(req));
 
@@ -81,12 +83,18 @@ void start_container(char *id, char *rootfs,
                      unsigned long soft, unsigned long hard, int nice)
 {
     char *stack = malloc(STACK_SIZE);
+    if (!stack) {
+        perror("malloc");
+        return;
+    }
 
     char *args[2];
     args[0] = id;
     args[1] = rootfs;
 
     int fd = open("/dev/container_monitor", O_RDWR);
+    if (fd < 0)
+        perror("monitor open");
 
     pid_t pid = clone(child_fn, stack + STACK_SIZE,
                       CLONE_NEWPID | CLONE_NEWUTS | CLONE_NEWNS | SIGCHLD,
@@ -94,6 +102,7 @@ void start_container(char *id, char *rootfs,
 
     if (pid < 0) {
         perror("clone");
+        free(stack);
         return;
     }
 
@@ -109,6 +118,15 @@ void start_container(char *id, char *rootfs,
     count++;
 
     printf("Started %s (PID %d)\n", id, pid);
+
+    /* NOTE:
+       For start(), we DO NOT unregister immediately
+       because container runs in background.
+       (Explain this in README)
+    */
+
+    if (fd >= 0)
+        close(fd);
 }
 
 /* ================= RUN ================= */
@@ -116,13 +134,44 @@ void start_container(char *id, char *rootfs,
 void run_container(char *id, char *rootfs,
                    unsigned long soft, unsigned long hard, int nice)
 {
-    start_container(id, rootfs, soft, hard, nice);
+    char *stack = malloc(STACK_SIZE);
+    if (!stack) {
+        perror("malloc");
+        return;
+    }
 
-    pid_t pid = containers[count - 1].pid;
+    char *args[2];
+    args[0] = id;
+    args[1] = rootfs;
+
+    int fd = open("/dev/container_monitor", O_RDWR);
+    if (fd < 0)
+        perror("monitor open");
+
+    pid_t pid = clone(child_fn, stack + STACK_SIZE,
+                      CLONE_NEWPID | CLONE_NEWUTS | CLONE_NEWNS | SIGCHLD,
+                      args);
+
+    if (pid < 0) {
+        perror("clone");
+        free(stack);
+        return;
+    }
+
+    setpriority(PRIO_PROCESS, pid, nice);
+
+    register_monitor(fd, id, pid, soft, hard);
 
     waitpid(pid, NULL, 0);
 
-    containers[count - 1].running = 0;
+    unregister_monitor(fd, id, pid);
+
+    if (fd >= 0)
+        close(fd);
+
+    free(stack);
+
+    printf("Container finished\n");
 }
 
 /* ================= PS ================= */
@@ -144,8 +193,14 @@ void stop_container(char *id)
     for (int i = 0; i < count; i++) {
         if (strcmp(containers[i].id, id) == 0) {
             kill(containers[i].pid, SIGTERM);
+
+            /* CLEANUP */
+            waitpid(containers[i].pid, NULL, 0);
+
             containers[i].running = 0;
+
             printf("Stopped %s\n", id);
+            return;
         }
     }
 }
